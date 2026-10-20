@@ -1,6 +1,7 @@
 package com.munorobo.app.ui.components
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,10 +27,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.munorobo.app.model.RobotColors
-import com.munorobo.app.model.RobotHeadShape
-import com.munorobo.app.model.RobotHeadState
-import com.munorobo.app.model.Swatches
+import com.munorobo.app.model.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,7 +99,30 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 1. Shell Color Row (Horizontal Scroll)
+            // 1. Surface Texture & Finish Selection
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Surface Texture & Finish",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
+                ) {
+                    items(Swatches.textures) { tex ->
+                        val isSelected = colors.texture == tex
+                        TextureCard(
+                            texture = tex,
+                            isSelected = isSelected,
+                            onClick = { onColorsChange(colors.copy(texture = tex)) }
+                        )
+                    }
+                }
+            }
+
+            // 2. Shell Color Row (Horizontal Scroll)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "Shell Color",
@@ -125,7 +146,7 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 2. Trim Color Row (Horizontal Scroll)
+            // 3. Trim Color Row (Horizontal Scroll)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "Trim Color",
@@ -149,7 +170,7 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 3. Screen Color Row (Horizontal Scroll)
+            // 4. Screen Color Row (Horizontal Scroll)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "Screen LED Color",
@@ -173,7 +194,7 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 4. Controls Row (Play/Pause Icon, Antenna Icon, Speed Chips) in a Horizontal Scroll
+            // 5. Controls Row (Play/Pause Icon, Antenna Icon, Speed Chips) in a Horizontal Scroll
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -221,11 +242,12 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 5. Code Snippet Card with Material 3 Copy Icon
+            // 6. Code Snippet Card with Material 3 Copy Icon
             val codeSnippet = """
 <RobotHead
   shape="${shape.label.lowercase()}"
   state="${state.label.lowercase()}"
+  texture="${colors.texture.name.lowercase()}"
   antenna={$antenna}
   speed={$speed}
 />
@@ -268,6 +290,67 @@ fun PropertiesBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(14.dp))
+        }
+    }
+}
+
+@Composable
+private fun TextureCard(
+    texture: SurfaceTexture,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val icon = when (texture) {
+        SurfaceTexture.GLOSS -> Icons.Filled.AutoAwesome
+        SurfaceTexture.METALLIC -> Icons.Filled.Shield
+        SurfaceTexture.BRUSHED -> Icons.Filled.Tune
+        SurfaceTexture.MATTE -> Icons.Filled.Palette
+        SurfaceTexture.CARBON -> Icons.Filled.Grid4x4
+        SurfaceTexture.HOLO -> Icons.Filled.BlurOn
+    }
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(
+            width = if (isSelected) 1.8.dp else 1.dp,
+            color = if (isSelected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+        ),
+        modifier = Modifier.width(112.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    text = texture.label,
+                    fontSize = 10.5.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+            Text(
+                text = texture.description,
+                fontSize = 8.5.sp,
+                lineHeight = 10.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                maxLines = 2
+            )
         }
     }
 }

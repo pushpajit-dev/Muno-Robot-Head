@@ -528,13 +528,15 @@ private fun generatePhaseJson(
   "activeConfig": {
     "shape": "${shape.label.lowercase()}",
     "state": "${state.label.lowercase()}",
+    "texture": "${colors.texture.name.lowercase()}",
     "speed": $speed,
     "antenna": $antenna
   },
   "assets": {
     "shapes": ["rectangle", "square", "circle", "hexagon"],
     "emotions": ["idle", "thinking", "searching", "listening", "speaking", "working", "happy", "error", "sleeping"],
-    "ledGrid": "16x8"
+    "textures": ["gloss", "metallic", "brushed", "matte", "carbon", "holo"],
+    "ledGrid": "22x14"
   }
 }
     """.trimIndent()
@@ -547,6 +549,7 @@ private fun applyPhaseJson(
     try {
         var shape: RobotHeadShape? = null
         var state: RobotHeadState? = null
+        var newColors: RobotColors? = null
         var speed: Float? = null
         var antenna: Boolean? = null
 
@@ -561,9 +564,15 @@ private fun applyPhaseJson(
             }
         }
 
+        SurfaceTexture.entries.forEach { tex ->
+            if (json.contains("\"texture\": \"${tex.name.lowercase()}\"", ignoreCase = true)) {
+                newColors = RobotColors(texture = tex)
+            }
+        }
+
         if (json.contains("\"antenna\": false", ignoreCase = true)) antenna = false
         if (json.contains("\"antenna\": true", ignoreCase = true)) antenna = true
 
-        onApply(shape, state, null, speed, antenna, true)
+        onApply(shape, state, newColors, speed, antenna, true)
     } catch (_: Exception) {}
 }

@@ -21,13 +21,86 @@ enum class RobotHeadState(val label: String) {
     SLEEPING("Sleeping")
 }
 
+enum class SurfaceTexture(
+    val label: String,
+    val description: String,
+    val metal: Float,
+    val spec: Float,
+    val shininess: Float,
+    val f0: Float,
+    val rim: Float,
+    val isMetallic: Boolean = false,
+    val isHolo: Boolean = false
+) {
+    GLOSS(
+        label = "Smooth Gloss",
+        description = "Moulded gloss with clear coat sheen",
+        metal = 0.15f,
+        spec = 0.65f,
+        shininess = 70f,
+        f0 = 0.05f,
+        rim = 0.9f
+    ),
+    METALLIC(
+        label = "Metallic Chrome",
+        description = "Polished reflective metallic alloy",
+        metal = 0.88f,
+        spec = 1.45f,
+        shininess = 115f,
+        f0 = 0.45f,
+        rim = 1.35f,
+        isMetallic = true
+    ),
+    BRUSHED(
+        label = "Brushed Metal",
+        description = "Anodized satin metal with soft sheen",
+        metal = 0.72f,
+        spec = 0.95f,
+        shininess = 40f,
+        f0 = 0.28f,
+        rim = 1.15f,
+        isMetallic = true
+    ),
+    MATTE(
+        label = "Matte Ceramic",
+        description = "Velvety non-reflective ceramic",
+        metal = 0.02f,
+        spec = 0.22f,
+        shininess = 18f,
+        f0 = 0.02f,
+        rim = 0.65f
+    ),
+    CARBON(
+        label = "Cyber Carbon",
+        description = "High-tech carbon with sharp highlights",
+        metal = 0.50f,
+        spec = 1.30f,
+        shininess = 95f,
+        f0 = 0.22f,
+        rim = 1.45f
+    ),
+    HOLO(
+        label = "Holo Prismatic",
+        description = "Iridescent shifting rainbow reflections",
+        metal = 0.38f,
+        spec = 1.35f,
+        shininess = 88f,
+        f0 = 0.32f,
+        rim = 1.95f,
+        isHolo = true
+    )
+}
+
 data class RobotColors(
     val shell: Color = Color(0xFF2B49A3),
     val trim: Color = Color(0xFF93A6C8),
-    val screen: Color = Color(0xFFE8F2FF)
+    val screen: Color = Color(0xFFE8F2FF),
+    val texture: SurfaceTexture = SurfaceTexture.GLOSS
 )
 
 object Swatches {
+    val textures = SurfaceTexture.entries
+
     val shellColors = listOf(
         "Cobalt" to Color(0xFF2B49A3),
         "Tomato" to Color(0xFFC8372D),

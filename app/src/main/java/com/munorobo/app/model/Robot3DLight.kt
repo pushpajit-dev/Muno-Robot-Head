@@ -9,14 +9,17 @@ data class Material3D(
     val metal: Float = 0.15f,    // metalness tint
     val spec: Float = 0.55f,     // specular strength
     val shininess: Float = 70f,  // specular exponent
-    val rim: Float = 0.9f        // rim light strength
+    val rim: Float = 0.9f,       // rim light strength
+    val isMetallic: Boolean = false,
+    val isHolo: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is Material3D) return false
         return albedo.contentEquals(other.albedo) &&
                 f0 == other.f0 && metal == other.metal &&
-                spec == other.spec && shininess == other.shininess && rim == other.rim
+                spec == other.spec && shininess == other.shininess &&
+                rim == other.rim && isMetallic == other.isMetallic && isHolo == other.isHolo
     }
 
     override fun hashCode(): Int {
@@ -26,6 +29,8 @@ data class Material3D(
         result = 31 * result + spec.hashCode()
         result = 31 * result + shininess.hashCode()
         result = 31 * result + rim.hashCode()
+        result = 31 * result + isMetallic.hashCode()
+        result = 31 * result + isHolo.hashCode()
         return result
     }
 }
@@ -90,11 +95,24 @@ object Robot3DLight {
         val backAngle = max(0f, nx * BACK[0] + ny * BACK[1] + nz * BACK[2])
         val rim = m.rim * backAngle * backAngle * (1f - ndv).pow(1.6f)
 
-        val diffuse = 0.05f + 0.1f * sky + 1.25f * key + 0.16f * fill
+        // For metals, diffuse is attenuated in favor of specular and environment reflections
+        val diffuseWeight = (1f - m.metal * 0.72f).coerceIn(0.12f, 1f)
+        val diffuse = (0.05f + 0.1f * sky + 1.25f * key + 0.16f * fill) * diffuseWeight
 
-        val r = computeChannel(0, m, diffuse, fres, env, spec, rim)
-        val g = computeChannel(1, m, diffuse, fres, env, spec, rim)
-        val b = computeChannel(2, m, diffuse, fres, env, spec, rim)
+        var r = computeChannel(0, m, diffuse, fres, env, spec, rim)
+        var g = computeChannel(1, m, diffuse, fres, env, spec, rim)
+        var b = computeChannel(2, m, diffuse, fres, env, spec, rim)
+
+        // Iridescent pearlescent rainbow sheen for HOLO texture
+        if (m.isHolo) {
+            val holoPhase = (1f - ndv) * 2.8f + (nx * 0.4f + ny * 0.4f)
+            val hR = (0.5f + 0.5f * sin(holoPhase * 6.28f)) * fres * 0.65f
+            val hG = (0.5f + 0.5f * sin((holoPhase + 0.33f) * 6.28f)) * fres * 0.65f
+            val hB = (0.5f + 0.5f * sin((holoPhase + 0.67f) * 6.28f)) * fres * 0.65f
+            r += hR
+            g += hG
+            b += hB
+        }
 
         return Color(display(r), display(g), display(b))
     }
@@ -109,8 +127,32 @@ object Robot3DLight {
         rim: Float
     ): Float {
         val a = m.albedo[i]
-        val tint = 1f - m.metal + m.metal * a * 2.2f
+        val tint = 1f - m.metal + m.metal * a * 2.5f
         val rimTint = if (i == 0) 0.62f else if (i == 1) 0.78f else 1f
-        return a * diffuse * (1f - fres * 0.6f) + (env + spec) * tint + rim * rimTint * (0.35f + a)
+        return a * diffuse * (1f - fres * 0.55f) + (env + spec) * tint + rim * rimTint * (0.35f + a)
+    }
+
+    /**
+     * Helper to compute the curved dome radiance colors for the front and back face plates.
+     */
+    fun domeColors(
+        material: Material3D,
+        rMatrix: FloatArray,
+        facing: Float = 1f,
+        dome: Float = 0.17f
+    ): List<Color> {
+        val at = { dx: Float, dy: Float ->
+            val w = Robot3DGeometry.rotate(rMatrix, dx * (if (facing < 0f) -1f else 1f), dy, facing)
+            val l = hypot(hypot(w[0], w[1]), w[2]).coerceAtLeast(1e-6f)
+            shade(material, w[0] / l, w[1] / l, w[2] / l)
+        }
+
+        val top = at(0f, -dome)
+        val center = at(0f, 0f)
+        val bottom = at(0f, dome)
+        val left = at(-dome, 0f)
+        val right = at(dome, 0f)
+
+        return listOf(top, center, bottom, left, right)
     }
 }

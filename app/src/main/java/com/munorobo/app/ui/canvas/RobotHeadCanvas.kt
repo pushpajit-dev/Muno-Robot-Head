@@ -105,24 +105,28 @@ fun RobotHeadCanvas(
         val shape3D = remember(shape) { Robot3DGeometry.getShape(shape) }
         val meshes = remember(shape) { Robot3DGeometry.headMeshes(shape3D) }
 
-        val shellMat = remember(colors.shell) {
+        val texture = colors.texture
+        val shellMat = remember(colors.shell, texture) {
             Material3D(
                 albedo = Robot3DLight.colorToLinear(colors.shell),
-                f0 = 0.05f,
-                metal = 0.15f,
-                spec = 0.55f,
-                shininess = 70f,
-                rim = 0.9f
+                f0 = texture.f0,
+                metal = texture.metal,
+                spec = texture.spec,
+                shininess = texture.shininess,
+                rim = texture.rim,
+                isMetallic = texture.isMetallic,
+                isHolo = texture.isHolo
             )
         }
-        val trimMat = remember(colors.trim) {
+        val trimMat = remember(colors.trim, texture) {
             Material3D(
                 albedo = Robot3DLight.colorToLinear(colors.trim),
-                f0 = 0.2f,
-                metal = 0.65f,
-                spec = 0.8f,
-                shininess = 45f,
-                rim = 0.7f
+                f0 = if (texture.isMetallic) 0.35f else 0.2f,
+                metal = if (texture.isMetallic) 0.85f else 0.65f,
+                spec = if (texture.isMetallic) 1.25f else 0.8f,
+                shininess = if (texture.isMetallic) 65f else 45f,
+                rim = if (texture.isMetallic) 1.15f else 0.7f,
+                isMetallic = texture.isMetallic
             )
         }
 
@@ -234,7 +238,7 @@ fun RobotHeadCanvas(
                 draw3DFrontPlateAndFace(
                     shape3D = shape3D,
                     project = project,
-                    shellColor = colors.shell,
+                    shellMat = shellMat,
                     screenColor = lightConfig.screenColorOverride ?: colors.screen,
                     faceGrid = faceGrid,
                     zf = zf,
@@ -247,8 +251,9 @@ fun RobotHeadCanvas(
                 draw3DBackPlate(
                     shape3D = shape3D,
                     project = project,
-                    shellColor = colors.shell,
-                    zf = zf
+                    shellMat = shellMat,
+                    zf = zf,
+                    rMatrix = rMatrix
                 )
             }
 
@@ -318,7 +323,7 @@ private fun DrawScope.drawMesh(
         val paint = Paint().apply {
             isAntiAlias = true
             style = Paint.Style.FILL_AND_STROKE
-            strokeWidth = max(0.6f, unit / 280f)
+            strokeWidth = max(0.8f, unit / 250f)
             strokeJoin = Paint.Join.ROUND
         }
 
@@ -349,13 +354,14 @@ private fun DrawScope.drawMesh(
 
 /**
  * 3D Front Face Plate & Screen.
- * Uses native 2D affine matrix projection so the screen, bezel, and every single LED
+ * Uses native 2D affine matrix projection with studio dome radiance gradients so the plate
+ * reflects the environment and lighting smoothly, while the bezel and 22x14 LED matrix
  * seamlessly follow the 3D model orientation (Yaw, Pitch, Roll) and zoom.
  */
 private fun DrawScope.draw3DFrontPlateAndFace(
     shape3D: Shape3D,
     project: (Float, Float, Float) -> FloatArray,
-    shellColor: Color,
+    shellMat: Material3D,
     screenColor: Color,
     faceGrid: Robot3DFaces.FaceGrid,
     zf: Float,
@@ -384,16 +390,45 @@ private fun DrawScope.draw3DFrontPlateAndFace(
         nativeCanvas.save()
         nativeCanvas.concat(planeMatrix)
 
-        // 1. Front Shell Plate (in Shell Color with 3D radiance shading)
+        // 1. Front Shell Plate with Studio Dome Radiance Gradients (Smooth Metallic Reflections)
         val platePath = android.graphics.Path()
         shape3D.tracePath(platePath, Robot3DGeometry.InsetConstants.plate - 0.002f)
 
+        val dome = Robot3DLight.domeColors(shellMat, rMatrix, facing = 1f, dome = 0.17f)
+        val topCol = dome[0].toArgb()
+        val centerCol = dome[1].toArgb()
+        val bottomCol = dome[2].toArgb()
+        val leftCol = dome[3].toArgb()
+        val rightCol = dome[4].toArgb()
+
+        // Vertical dome gradient
+        val vShader = android.graphics.LinearGradient(
+            0f, -shape3D.hy, 0f, shape3D.hy,
+            intArrayOf(topCol, centerCol, bottomCol),
+            floatArrayOf(0f, 0.5f, 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
         val platePaint = Paint().apply {
             isAntiAlias = true
             style = Paint.Style.FILL
-            color = shellColor.toArgb()
+            shader = vShader
         }
         nativeCanvas.drawPath(platePath, platePaint)
+
+        // Horizontal cross-dome reflection overlay (50% blend for curved surface appearance)
+        val hShader = android.graphics.LinearGradient(
+            -shape3D.hx, 0f, shape3D.hx, 0f,
+            intArrayOf(leftCol, centerCol, rightCol),
+            floatArrayOf(0f, 0.5f, 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        val hPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            shader = hShader
+            alpha = 135
+        }
+        nativeCanvas.drawPath(platePath, hPaint)
 
         // 2. Recessed Screen Hole Border (Dark Bezel Ring)
         val holePath = android.graphics.Path()
@@ -455,7 +490,7 @@ private fun DrawScope.draw3DFrontPlateAndFace(
                 if (intensity > 0.01f) {
                     // Outer glow bloom
                     ledPaint.color = android.graphics.Color.argb(
-                        (intensity * 105).roundToInt().coerceIn(0, 255),
+                        (intensity * 110).roundToInt().coerceIn(0, 255),
                         rC, gC, bC
                     )
                     nativeCanvas.drawCircle(u, v, radius * 1.85f, ledPaint)
@@ -483,7 +518,7 @@ private fun DrawScope.draw3DFrontPlateAndFace(
             -0.55f + sheenShift, -0.35f, 0.15f + sheenShift, 0.35f,
             intArrayOf(
                 android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.argb(22, 220, 235, 255),
+                android.graphics.Color.argb(25, 220, 235, 255),
                 android.graphics.Color.TRANSPARENT
             ),
             floatArrayOf(0f, 0.5f, 1f),
@@ -505,13 +540,14 @@ private fun DrawScope.draw3DFrontPlateAndFace(
 }
 
 /**
- * 3D Back Plate with cooling vent slots.
+ * 3D Back Plate with cooling vent slots and dome lighting.
  */
 private fun DrawScope.draw3DBackPlate(
     shape3D: Shape3D,
     project: (Float, Float, Float) -> FloatArray,
-    shellColor: Color,
-    zf: Float
+    shellMat: Material3D,
+    zf: Float,
+    rMatrix: FloatArray
 ) {
     drawIntoCanvas { canvas ->
         val nativeCanvas = canvas.nativeCanvas
@@ -533,13 +569,21 @@ private fun DrawScope.draw3DBackPlate(
         nativeCanvas.save()
         nativeCanvas.concat(backMatrix)
 
-        // Back shell plate
+        // Back shell plate with dome lighting
         val backPlatePath = android.graphics.Path()
         shape3D.tracePath(backPlatePath, Robot3DGeometry.InsetConstants.plate - 0.002f)
+
+        val dome = Robot3DLight.domeColors(shellMat, rMatrix, facing = -1f, dome = 0.17f)
+        val vShader = android.graphics.LinearGradient(
+            0f, -shape3D.hy, 0f, shape3D.hy,
+            intArrayOf(dome[0].toArgb(), dome[1].toArgb(), dome[2].toArgb()),
+            floatArrayOf(0f, 0.5f, 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
         val backPaint = Paint().apply {
             isAntiAlias = true
             style = Paint.Style.FILL
-            color = shellColor.toArgb()
+            shader = vShader
         }
         nativeCanvas.drawPath(backPlatePath, backPaint)
 
