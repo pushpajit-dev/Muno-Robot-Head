@@ -4,22 +4,25 @@ import android.graphics.Path
 import kotlin.math.*
 
 data class Mesh(
-    val pos: FloatArray,      // [x, y, z] per vertex
-    val quads: IntArray,      // 4 indices per quad
-    val normals: FloatArray   // [nx, ny, nz] per quad
+    val pos: FloatArray,            // [x, y, z] per vertex
+    val quads: IntArray,            // 4 indices per quad
+    val normals: FloatArray,         // [nx, ny, nz] per quad
+    val vertexNormals: FloatArray   // [nx, ny, nz] per vertex
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is Mesh) return false
         return pos.contentEquals(other.pos) &&
                 quads.contentEquals(other.quads) &&
-                normals.contentEquals(other.normals)
+                normals.contentEquals(other.normals) &&
+                vertexNormals.contentEquals(other.vertexNormals)
     }
 
     override fun hashCode(): Int {
         var result = pos.contentHashCode()
         result = 31 * result + quads.contentHashCode()
         result = 31 * result + normals.contentHashCode()
+        result = 31 * result + vertexNormals.contentHashCode()
         return result
     }
 }
@@ -35,6 +38,7 @@ class Shape3D(
     val hy: Float,
     val pitch: Float,
     val earX: Float,
+    val screws: List<Triple<Float, Float, Float>>,
     val sdPoly: (Float, Float) -> Float
 ) {
     fun sd(x: Float, y: Float, inset: Float): Float = sdPoly(x, y) - (r - inset)
@@ -52,7 +56,7 @@ class Shape3D(
                 path.lineTo(startX, startY)
             }
             val sweep = c.a1 - c.a0
-            val steps = max(2, ceil((sweep / (PI.toFloat() / 2f)) * 8f).toInt())
+            val steps = max(3, ceil((sweep / (PI.toFloat() / 2f)) * 14f).toInt())
             for (s in 1..steps) {
                 val a = c.a0 + (s.toFloat() / steps) * sweep
                 path.lineTo(cx + rr * cos(a), cy + rr * sin(a))
@@ -154,14 +158,15 @@ object Robot3DGeometry {
             normals[q * 3 + 1] = n[1]
             normals[q * 3 + 2] = n[2]
         }
-        return Mesh(pos, quads, normals)
+        return Mesh(pos, quads, normals, vn)
     }
 
     private fun makeShape(
         name: RobotHeadShape,
         centres: List<Pair<Float, Float>>,
         r: Float,
-        depth: Float
+        depth: Float,
+        screwDirs: List<Float> = listOf(45f, 135f)
     ): Shape3D {
         val sorted = centres.map { (x, y) -> Triple(x, y, atan2(y, x)) }
             .sortedBy { it.third }
@@ -215,7 +220,7 @@ object Robot3DGeometry {
 
         var lo = 0f
         var hi = hx + 0.1f
-        for (i in 0 until 35) {
+        for (i in 0 until 40) {
             val mid = (lo + hi) / 2f
             if (sdPoly(mid, HeadConstants.earY) - r < 0) lo = mid else hi = mid
         }
@@ -224,7 +229,19 @@ object Robot3DGeometry {
         val gh = 2f * (hy - InsetConstants.glass)
         val pitch = min((0.6f * gw) / 14f, (0.65f * gh) / 10f)
 
-        return Shape3D(name, r, depth, corners, hx, hy, pitch, lo - 0.008f, sdPoly)
+        // Corner screw placement
+        val inward = (InsetConstants.hole - 0.018f + InsetConstants.plate) / 2f
+        val screws = screwDirs.mapIndexed { idx, deg ->
+            val rad = Math.toRadians(deg.toDouble()).toFloat()
+            val c = corners.find { k ->
+                val diff0 = (rad - k.a0).mod(TAU)
+                val diff1 = (k.a1 - rad).mod(TAU)
+                diff0 >= -1e-4f && diff1 >= -1e-4f
+            } ?: corners[0]
+            Triple(c.x + cos(rad) * (r - inward), c.y + sin(rad) * (r - inward), 0.5f + idx * 0.9f)
+        }
+
+        return Shape3D(name, r, depth, corners, hx, hy, pitch, lo - 0.008f, screws, sdPoly)
     }
 
     private val hexCentres = listOf(0, 60, 120, 180, 240, 300).map { d ->
@@ -238,30 +255,38 @@ object Robot3DGeometry {
                 RobotHeadShape.RECTANGLE,
                 listOf(Pair(-0.29f, -0.17f), Pair(0.29f, -0.17f), Pair(0.29f, 0.17f), Pair(-0.29f, 0.17f)),
                 0.21f,
-                0.6f
+                0.6f,
+                listOf(45f, 135f)
             )
             RobotHeadShape.SQUARE -> makeShape(
                 RobotHeadShape.SQUARE,
                 listOf(Pair(-0.22f, -0.22f), Pair(0.22f, -0.22f), Pair(0.22f, 0.22f), Pair(-0.22f, 0.22f)),
                 0.2f,
-                0.6f
+                0.6f,
+                listOf(45f, 135f)
             )
             RobotHeadShape.CIRCLE -> makeShape(
                 RobotHeadShape.CIRCLE,
                 listOf(Pair(0f, 0f)),
                 0.46f,
-                0.56f
+                0.56f,
+                listOf(45f, 135f)
             )
             RobotHeadShape.HEXAGON -> makeShape(
                 RobotHeadShape.HEXAGON,
                 hexCentres,
                 0.16f,
-                0.58f
+                0.58f,
+                listOf(60f, 120f)
             )
         }
     }
 
-    fun buildBody(shape: Shape3D, bevelSteps: Int = 8): Mesh {
+    /**
+     * Builds beveled body mesh with high tessellation (16 bevel steps, 16 outline steps)
+     * for seamless smooth lighting without polygonal faceting.
+     */
+    fun buildBody(shape: Shape3D, bevelSteps: Int = 16): Mesh {
         val r = shape.r
         val b = HeadConstants.bevel
         val zf = shape.depth / 2f
@@ -269,7 +294,7 @@ object Robot3DGeometry {
         val outline = ArrayList<FloatArray>()
         for (c in shape.corners) {
             val sweep = c.a1 - c.a0
-            val steps = max(2, ceil((sweep / (PI.toFloat() / 2f)) * 10f).toInt())
+            val steps = max(4, ceil((sweep / (PI.toFloat() / 2f)) * 16f).toInt())
             val last = if (sweep >= TAU - 1e-6f) steps - 1 else steps
             for (i in 0..last) {
                 val a = c.a0 + (i.toFloat() / steps) * sweep
@@ -310,11 +335,14 @@ object Robot3DGeometry {
         return finish(pos.toFloatArray(), stitch(profile.size, outline.size), vn.toFloatArray())
     }
 
+    /**
+     * High-resolution lathe mesh with 48 segments for perfectly curved, mirror-smooth metallic knobs.
+     */
     fun buildLathe(
         profile: List<Pair<Float, Float>>,
         origin: FloatArray,
         axis: FloatArray,
-        segments: Int = 20
+        segments: Int = 48
     ): Mesh {
         val e1 = if (abs(axis[1]) > 0.9f) floatArrayOf(1f, 0f, 0f) else floatArrayOf(0f, 1f, 0f)
         val e2 = norm(
@@ -378,10 +406,10 @@ object Robot3DGeometry {
     fun headMeshes(shape: Shape3D): HeadMeshes3D {
         return cache.getOrPut(shape.name) {
             HeadMeshes3D(
-                body = buildBody(shape),
-                earL = buildLathe(earProfile, floatArrayOf(-shape.earX, HeadConstants.earY, 0f), floatArrayOf(-1f, 0f, 0f)),
-                earR = buildLathe(earProfile, floatArrayOf(shape.earX, HeadConstants.earY, 0f), floatArrayOf(1f, 0f, 0f)),
-                collar = buildLathe(collarProfile, floatArrayOf(0f, -shape.hy, 0f), floatArrayOf(0f, -1f, 0f), 16)
+                body = buildBody(shape, bevelSteps = 16),
+                earL = buildLathe(earProfile, floatArrayOf(-shape.earX, HeadConstants.earY, 0f), floatArrayOf(-1f, 0f, 0f), segments = 48),
+                earR = buildLathe(earProfile, floatArrayOf(shape.earX, HeadConstants.earY, 0f), floatArrayOf(1f, 0f, 0f), segments = 48),
+                collar = buildLathe(collarProfile, floatArrayOf(0f, -shape.hy, 0f), floatArrayOf(0f, -1f, 0f), segments = 32)
             )
         }
     }
