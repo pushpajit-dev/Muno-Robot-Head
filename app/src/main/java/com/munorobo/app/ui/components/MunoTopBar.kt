@@ -83,11 +83,10 @@ fun MunoTopBar(
                     )
                 }
 
-                // Properties Sheet Button
-                FilledTonalIconButton(
+                // Properties Sheet Button (Transparent without background color)
+                IconButton(
                     onClick = onOpenProperties,
-                    modifier = Modifier.size(38.dp),
-                    shape = RoundedCornerShape(10.dp)
+                    modifier = Modifier.size(38.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Tune,
@@ -98,18 +97,14 @@ fun MunoTopBar(
                 }
 
                 // Dev Studio Dialog Button
-                FilledIconButton(
+                IconButton(
                     onClick = onOpenDevDialog,
-                    modifier = Modifier.size(38.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
+                    modifier = Modifier.size(38.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Code,
                         contentDescription = "Dev Studio",
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
                     )
                 }

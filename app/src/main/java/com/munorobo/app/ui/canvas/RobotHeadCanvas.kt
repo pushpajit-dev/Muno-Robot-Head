@@ -1,6 +1,7 @@
 package com.munorobo.app.ui.canvas
 
 import android.graphics.Paint
+import android.graphics.RectF
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -93,8 +94,8 @@ fun RobotHeadCanvas(
                             // Pinch zoom
                             zoomScale = (zoomScale * zoom).coerceIn(0.5f, 3.2f)
                             // 3D rotation via finger drag: horizontal rotates yaw, vertical rotates pitch
-                            userYaw = (userYaw + pan.x * 0.007f).coerceIn(-1.2f, 1.2f)
-                            userPitch = (userPitch - pan.y * 0.007f).coerceIn(-0.85f, 0.85f)
+                            userYaw = (userYaw + pan.x * 0.007f).coerceIn(-1.4f, 1.4f)
+                            userPitch = (userPitch - pan.y * 0.007f).coerceIn(-0.95f, 0.95f)
                             panOffset += pan * 0.15f
                         }
                     }
@@ -124,6 +125,8 @@ fun RobotHeadCanvas(
                 rim = 0.7f
             )
         }
+
+        val faceGrid = remember { Robot3DFaces.FaceGrid() }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val width = size.width
@@ -188,37 +191,86 @@ fun RobotHeadCanvas(
                 )
             }
 
-            // Ear depth values to determine draw order
+            // Depths to determine draw order
             val earLz = Robot3DGeometry.rotate(rMatrix, -shape3D.earX, Robot3DGeometry.HeadConstants.earY, 0f)[2]
             val earRz = Robot3DGeometry.rotate(rMatrix, shape3D.earX, Robot3DGeometry.HeadConstants.earY, 0f)[2]
             val topZ = Robot3DGeometry.rotate(rMatrix, 0f, -shape3D.hy, 0f)[2]
             val antennaBehind = topZ < -0.015f
 
+            val lightConfig = Robot3DFaces.getLightConfig(state)
+
+            // Populate face grid for current state and time
+            Robot3DFaces.populate(faceGrid, state, time)
+
             // 1. Draw Ear behind if facing away
             if (earLz < 0f) drawMesh(meshes.earL, trimMat, project, rMatrix, unit)
             if (earRz < 0f) drawMesh(meshes.earR, trimMat, project, rMatrix, unit)
 
-            // 2. Draw Antenna behind if head tilted back
-            if (antennaBehind && antenna) {
-                drawAntenna3D(shape3D, project, colors.trim, colors.screen, unit, time, state)
+            // 2. Draw Antenna & Collar behind if head tilted back
+            if (antennaBehind) {
+                drawMesh(meshes.collar, trimMat, project, rMatrix, unit)
+                if (antenna) {
+                    drawAntennaStemAndBulb(
+                        shape3D = shape3D,
+                        project = project,
+                        trimColor = colors.trim,
+                        lightConfig = lightConfig,
+                        unit = unit,
+                        time = time,
+                        userYaw = userYaw,
+                        userPitch = userPitch
+                    )
+                }
             }
 
             // 3. Draw Main Head Shell 3D Quad Mesh
             drawMesh(meshes.body, shellMat, project, rMatrix, unit)
 
-            // 4. Draw Front Plate, Recessed Bezel & LED Matrix Face
+            // 4. Draw 3D Front Plate, Recessed Bezel & LED Face (or Back Plate with Vents if rotated back)
             val frontZ = rMatrix[8]
-            if (frontZ > 0.02f) {
-                drawFrontFace(shape3D, project, colors, state, time, unit, frontZ)
+            val zf = shape3D.depth / 2f
+
+            if (frontZ > 0.005f) {
+                draw3DFrontPlateAndFace(
+                    shape3D = shape3D,
+                    project = project,
+                    shellColor = colors.shell,
+                    screenColor = lightConfig.screenColorOverride ?: colors.screen,
+                    faceGrid = faceGrid,
+                    zf = zf,
+                    unit = unit,
+                    totalYaw = totalYaw,
+                    totalPitch = totalPitch,
+                    rMatrix = rMatrix
+                )
+            } else if (frontZ < -0.005f) {
+                draw3DBackPlate(
+                    shape3D = shape3D,
+                    project = project,
+                    shellColor = colors.shell,
+                    zf = zf
+                )
             }
 
             // 5. Draw Ear in front
             if (earLz >= 0f) drawMesh(meshes.earL, trimMat, project, rMatrix, unit)
             if (earRz >= 0f) drawMesh(meshes.earR, trimMat, project, rMatrix, unit)
 
-            // 6. Draw Antenna in front
-            if (!antennaBehind && antenna) {
-                drawAntenna3D(shape3D, project, colors.trim, colors.screen, unit, time, state)
+            // 6. Draw Antenna & Collar in front
+            if (!antennaBehind) {
+                drawMesh(meshes.collar, trimMat, project, rMatrix, unit)
+                if (antenna) {
+                    drawAntennaStemAndBulb(
+                        shape3D = shape3D,
+                        project = project,
+                        trimColor = colors.trim,
+                        lightConfig = lightConfig,
+                        unit = unit,
+                        time = time,
+                        userYaw = userYaw,
+                        userPitch = userPitch
+                    )
+                }
             }
         }
     }
@@ -249,7 +301,7 @@ private fun DrawScope.drawMesh(
         val nz = mesh.normals[k * 3 + 2]
         // Back-face culling using rotated Z normal
         val rotatedNz = rMatrix[6] * nx + rMatrix[7] * ny + rMatrix[8] * nz
-        if (rotatedNz < -0.04f) continue
+        if (rotatedNz < -0.03f) continue
 
         val zSum = projected[mesh.quads[k * 4] * 3 + 2] +
                 projected[mesh.quads[k * 4 + 1] * 3 + 2] +
@@ -266,7 +318,7 @@ private fun DrawScope.drawMesh(
         val paint = Paint().apply {
             isAntiAlias = true
             style = Paint.Style.FILL_AND_STROKE
-            strokeWidth = max(0.5f, unit / 280f)
+            strokeWidth = max(0.6f, unit / 280f)
             strokeJoin = Paint.Join.ROUND
         }
 
@@ -295,267 +347,364 @@ private fun DrawScope.drawMesh(
     }
 }
 
-private fun DrawScope.drawFrontFace(
-    shape: Shape3D,
+/**
+ * 3D Front Face Plate & Screen.
+ * Uses native 2D affine matrix projection so the screen, bezel, and every single LED
+ * seamlessly follow the 3D model orientation (Yaw, Pitch, Roll) and zoom.
+ */
+private fun DrawScope.draw3DFrontPlateAndFace(
+    shape3D: Shape3D,
     project: (Float, Float, Float) -> FloatArray,
-    colors: RobotColors,
-    state: RobotHeadState,
-    time: Float,
+    shellColor: Color,
+    screenColor: Color,
+    faceGrid: Robot3DFaces.FaceGrid,
+    zf: Float,
     unit: Float,
-    frontZ: Float
+    totalYaw: Float,
+    totalPitch: Float,
+    rMatrix: FloatArray
 ) {
-    val zf = shape.depth / 2f
-    val centerP = project(0f, 0f, zf)
+    drawIntoCanvas { canvas ->
+        val nativeCanvas = canvas.nativeCanvas
 
-    // Screen bezel dimensions
-    val gw = 2f * (shape.hx - Robot3DGeometry.InsetConstants.glass)
-    val gh = 2f * (shape.hy - Robot3DGeometry.InsetConstants.glass)
-    val screenW = gw * unit
-    val screenH = gh * unit
+        val o = project(0f, 0f, zf)
+        val ex = project(1f, 0f, zf)
+        val ey = project(0f, 1f, zf)
 
-    val sx = centerP[0] - screenW / 2f
-    val sy = centerP[1] - screenH / 2f
-    val cornerR = shape.r * unit * 0.6f
-
-    // Recessed dark bezel
-    drawRoundRect(
-        color = Color(0xFF0F1420),
-        topLeft = Offset(sx, sy),
-        size = Size(screenW, screenH),
-        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerR, cornerR)
-    )
-
-    // Deep LCD glass area
-    val pad = max(3f, unit * 0.02f)
-    val lcdW = screenW - pad * 2f
-    val lcdH = screenH - pad * 2f
-    val lcdX = sx + pad
-    val lcdY = sy + pad
-
-    drawRoundRect(
-        color = Color(0xFF070B14),
-        topLeft = Offset(lcdX, lcdY),
-        size = Size(lcdW, lcdH),
-        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerR * 0.8f, cornerR * 0.8f)
-    )
-
-    // 16 cols x 8 rows LED Matrix Grid
-    val cols = 16
-    val rows = 8
-    val cellW = lcdW / cols
-    val cellH = lcdH / rows
-    val pixelRadius = min(cellW, cellH) * 0.33f
-
-    val matrix = Array(rows) { BooleanArray(cols) { false } }
-    populateFaceMatrix(matrix, state, time)
-
-    val activeColor = if (state == RobotHeadState.ERROR) Color(0xFFFF3333) else colors.screen
-    val offColor = Color(0x15FFFFFF)
-
-    for (r in 0 until rows) {
-        for (c in 0 until cols) {
-            val px = lcdX + c * cellW + cellW / 2f
-            val py = lcdY + r * cellH + cellH / 2f
-            val isOn = matrix[r][c]
-
-            if (isOn) {
-                // Pixel Glow Bloom
-                drawCircle(
-                    color = activeColor.copy(alpha = 0.32f),
-                    radius = pixelRadius * 1.9f,
-                    center = Offset(px, py)
+        val planeMatrix = android.graphics.Matrix().apply {
+            setValues(
+                floatArrayOf(
+                    ex[0] - o[0], ey[0] - o[0], o[0],
+                    ex[1] - o[1], ey[1] - o[1], o[1],
+                    0f, 0f, 1f
                 )
-                // Solid Core LED
-                drawCircle(
-                    color = activeColor,
-                    radius = pixelRadius,
-                    center = Offset(px, py)
-                )
-            } else {
-                // Dim unlit LED dot
-                drawCircle(
-                    color = offColor,
-                    radius = pixelRadius * 0.7f,
-                    center = Offset(px, py)
-                )
+            )
+        }
+
+        nativeCanvas.save()
+        nativeCanvas.concat(planeMatrix)
+
+        // 1. Front Shell Plate (in Shell Color with 3D radiance shading)
+        val platePath = android.graphics.Path()
+        shape3D.tracePath(platePath, Robot3DGeometry.InsetConstants.plate - 0.002f)
+
+        val platePaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = shellColor.toArgb()
+        }
+        nativeCanvas.drawPath(platePath, platePaint)
+
+        // 2. Recessed Screen Hole Border (Dark Bezel Ring)
+        val holePath = android.graphics.Path()
+        shape3D.tracePath(holePath, Robot3DGeometry.InsetConstants.hole)
+        val holePaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = android.graphics.Color.rgb(7, 9, 13)
+        }
+        nativeCanvas.drawPath(holePath, holePaint)
+
+        // 3. Screen Glass Area (Clipped to glass boundary)
+        val glassPath = android.graphics.Path()
+        shape3D.tracePath(glassPath, Robot3DGeometry.InsetConstants.glass)
+
+        nativeCanvas.save()
+        nativeCanvas.clipPath(glassPath)
+
+        // Dark LCD Glass Background
+        val glassBgPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = android.graphics.Color.rgb(12, 16, 24)
+        }
+        nativeCanvas.drawRect(
+            RectF(-shape3D.hx, -shape3D.hy, shape3D.hx, shape3D.hy),
+            glassBgPaint
+        )
+
+        // 4. 22x14 LED Matrix Face (Drawn in exact 3D model space)
+        val cols = Robot3DFaces.COLS
+        val rows = Robot3DFaces.ROWS
+        val pitch = shape3D.pitch
+
+        val totalW = cols * pitch
+        val totalH = rows * pitch
+        val startU = -totalW / 2f + pitch / 2f
+        val startV = -totalH / 2f + pitch / 2f
+
+        val cell = pitch * 0.8f
+        val radius = cell / 2f
+
+        val activeArgb = screenColor.toArgb()
+        val rC = android.graphics.Color.red(activeArgb)
+        val gC = android.graphics.Color.green(activeArgb)
+        val bC = android.graphics.Color.blue(activeArgb)
+
+        val ledPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+        }
+
+        for (r in 0 until rows) {
+            val v = startV + r * pitch
+            for (c in 0 until cols) {
+                val u = startU + c * pitch
+                val intensity = faceGrid.get(c, r)
+
+                if (intensity > 0.01f) {
+                    // Outer glow bloom
+                    ledPaint.color = android.graphics.Color.argb(
+                        (intensity * 105).roundToInt().coerceIn(0, 255),
+                        rC, gC, bC
+                    )
+                    nativeCanvas.drawCircle(u, v, radius * 1.85f, ledPaint)
+
+                    // Core bright LED
+                    val coreR = min(255, (rC * 0.7f + 255 * 0.3f).roundToInt())
+                    val coreG = min(255, (gC * 0.7f + 255 * 0.3f).roundToInt())
+                    val coreB = min(255, (bC * 0.7f + 255 * 0.3f).roundToInt())
+                    ledPaint.color = android.graphics.Color.argb(
+                        (intensity * 255).roundToInt().coerceIn(0, 255),
+                        coreR, coreG, coreB
+                    )
+                    nativeCanvas.drawCircle(u, v, radius, ledPaint)
+                } else {
+                    // Dim unlit LED lens
+                    ledPaint.color = android.graphics.Color.argb(38, 70, 76, 88)
+                    nativeCanvas.drawCircle(u, v, radius * 0.72f, ledPaint)
+                }
             }
         }
+
+        // 5. Dynamic Glass Sheen Reflection (Slides as robot turns)
+        val sheenShift = -0.05f - totalYaw * 0.85f + totalPitch * 0.45f
+        val sheenShader = android.graphics.LinearGradient(
+            -0.55f + sheenShift, -0.35f, 0.15f + sheenShift, 0.35f,
+            intArrayOf(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.argb(22, 220, 235, 255),
+                android.graphics.Color.TRANSPARENT
+            ),
+            floatArrayOf(0f, 0.5f, 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        val sheenPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            shader = sheenShader
+        }
+        nativeCanvas.drawRect(
+            RectF(-shape3D.hx, -shape3D.hy, shape3D.hx, shape3D.hy),
+            sheenPaint
+        )
+
+        nativeCanvas.restore() // Restore glass clip
+        nativeCanvas.restore() // Restore front plane matrix
     }
 }
 
-private fun DrawScope.drawAntenna3D(
-    shape: Shape3D,
+/**
+ * 3D Back Plate with cooling vent slots.
+ */
+private fun DrawScope.draw3DBackPlate(
+    shape3D: Shape3D,
+    project: (Float, Float, Float) -> FloatArray,
+    shellColor: Color,
+    zf: Float
+) {
+    drawIntoCanvas { canvas ->
+        val nativeCanvas = canvas.nativeCanvas
+
+        val oBack = project(0f, 0f, -zf)
+        val exBack = project(-1f, 0f, -zf) // Horizontal flip for back
+        val eyBack = project(0f, 1f, -zf)
+
+        val backMatrix = android.graphics.Matrix().apply {
+            setValues(
+                floatArrayOf(
+                    exBack[0] - oBack[0], eyBack[0] - oBack[0], oBack[0],
+                    exBack[1] - oBack[1], eyBack[1] - oBack[1], oBack[1],
+                    0f, 0f, 1f
+                )
+            )
+        }
+
+        nativeCanvas.save()
+        nativeCanvas.concat(backMatrix)
+
+        // Back shell plate
+        val backPlatePath = android.graphics.Path()
+        shape3D.tracePath(backPlatePath, Robot3DGeometry.InsetConstants.plate - 0.002f)
+        val backPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = shellColor.toArgb()
+        }
+        nativeCanvas.drawPath(backPlatePath, backPaint)
+
+        // Cooling vents
+        val ventPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = android.graphics.Color.rgb(18, 22, 30)
+        }
+        val vents = listOf(-0.12f, -0.065f, -0.01f, 0.045f, 0.1f)
+        for (vy in vents) {
+            val ventRect = RectF(-0.2f, vy - 0.014f, 0.2f, vy + 0.014f)
+            nativeCanvas.drawRoundRect(ventRect, 0.014f, 0.014f, ventPaint)
+        }
+
+        nativeCanvas.restore()
+    }
+}
+
+/**
+ * True 3D Antenna Stem and Frosted Glass Sphere Bulb with dynamic emotion light & glow.
+ */
+private fun DrawScope.drawAntennaStemAndBulb(
+    shape3D: Shape3D,
     project: (Float, Float, Float) -> FloatArray,
     trimColor: Color,
-    screenColor: Color,
+    lightConfig: Robot3DFaces.StateLightConfig,
     unit: Float,
     time: Float,
-    state: RobotHeadState
+    userYaw: Float,
+    userPitch: Float
 ) {
-    val baseP = project(0f, -shape.hy, 0f)
-    val tipP = project(0f, -shape.hy - Robot3DGeometry.HeadConstants.stem, 0f)
+    val top = -shape3D.hy - 0.028f
+    val stemLength = Robot3DGeometry.HeadConstants.stem
 
-    // Stem line in 3D
-    drawLine(
-        color = trimColor,
-        start = Offset(baseP[0], baseP[1]),
-        end = Offset(tipP[0], tipP[1]),
-        strokeWidth = max(3f, unit * 0.022f),
-        cap = StrokeCap.Round
+    // Natural antenna spring sway
+    val ax = sin(time * 3.2f) * 0.12f - userYaw * 0.15f
+    val az = cos(time * 2.6f) * 0.1f - userPitch * 0.15f
+    val dir = floatArrayOf(
+        sin(ax),
+        -cos(ax) * cos(az),
+        sin(az)
     )
 
-    // Glowing Bulb in 3D
-    val bulbRadius = Robot3DGeometry.HeadConstants.ball * unit * 1.35f
-    val pulse = when (state) {
-        RobotHeadState.ERROR -> abs(sin(time * 12f))
-        RobotHeadState.THINKING -> abs(sin(time * 4f))
-        RobotHeadState.HAPPY -> 0.85f + abs(sin(time * 6f)) * 0.25f
-        else -> 0.65f + abs(sin(time * 2f)) * 0.35f
-    }
-
-    val bulbColor = if (state == RobotHeadState.ERROR) Color(0xFFFF3333) else screenColor
-
-    drawCircle(
-        color = bulbColor.copy(alpha = 0.35f * pulse),
-        radius = bulbRadius * (1.6f + pulse * 0.5f),
-        center = Offset(tipP[0], tipP[1])
+    val baseP = project(0f, top, 0f)
+    val ctrlP = project(0f, top - stemLength * 0.55f, 0f)
+    val tipP = project(dir[0] * stemLength, top + dir[1] * stemLength, dir[2] * stemLength)
+    val ballRadius = Robot3DGeometry.HeadConstants.ball
+    val ballCP = project(
+        dir[0] * (stemLength + ballRadius * 0.85f),
+        top + dir[1] * (stemLength + ballRadius * 0.85f),
+        dir[2] * (stemLength + ballRadius * 0.85f)
     )
-    drawCircle(
-        color = bulbColor,
-        radius = bulbRadius,
-        center = Offset(tipP[0], tipP[1])
-    )
-}
 
-private fun populateFaceMatrix(
-    matrix: Array<BooleanArray>,
-    state: RobotHeadState,
-    time: Float
-) {
-    val blinkCycle = time % 3.5f
-    val isBlinking = blinkCycle < 0.16f && state != RobotHeadState.SLEEPING && state != RobotHeadState.ERROR
+    drawIntoCanvas { canvas ->
+        val nativeCanvas = canvas.nativeCanvas
 
-    when (state) {
-        RobotHeadState.IDLE -> {
-            if (isBlinking) {
-                for (c in 3..5) matrix[3][c] = true
-                for (c in 10..12) matrix[3][c] = true
-            } else {
-                drawEye(matrix, 4, 3)
-                drawEye(matrix, 11, 3)
-            }
-            matrix[6][6] = true; matrix[6][7] = true; matrix[6][8] = true; matrix[6][9] = true
-            matrix[5][5] = true; matrix[5][10] = true
+        // 1. Antenna Stem: Multi-layer metallic 3D curve
+        val stemPath = android.graphics.Path().apply {
+            moveTo(baseP[0], baseP[1])
+            quadTo(ctrlP[0], ctrlP[1], tipP[0], tipP[1])
         }
 
-        RobotHeadState.THINKING -> {
-            drawEye(matrix, 4, 2)
-            drawEye(matrix, 11, 2)
-
-            val dot = (time * 4f).toInt() % 3
-            if (dot == 0) matrix[1][7] = true
-            if (dot == 1) matrix[1][8] = true
-            if (dot == 2) matrix[1][9] = true
-
-            matrix[6][7] = true; matrix[6][8] = true
+        val stemCorePaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = max(2.5f, unit * 0.02f)
+            color = android.graphics.Color.rgb(65, 75, 90)
         }
+        nativeCanvas.drawPath(stemPath, stemCorePaint)
 
-        RobotHeadState.SEARCHING -> {
-            val beamCol = ((sin(time * 3f) + 1f) / 2f * 15f).roundToInt().coerceIn(0, 15)
-            for (r in 0..7) matrix[r][beamCol] = true
-            val pupilCol = beamCol.coerceIn(2, 13)
-            matrix[3][pupilCol] = true
-            matrix[4][pupilCol] = true
+        val trimArgb = trimColor.toArgb()
+        val stemTrimPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = max(1.5f, unit * 0.011f)
+            color = trimArgb
         }
+        nativeCanvas.drawPath(stemPath, stemTrimPaint)
 
-        RobotHeadState.LISTENING -> {
-            val h1 = (abs(sin(time * 6f)) * 5f).toInt()
-            val h2 = (abs(sin(time * 8f + 1f)) * 6f).toInt()
-            val h3 = (abs(sin(time * 5f + 2f)) * 7f).toInt()
-            val h4 = (abs(sin(time * 7f + 3f)) * 6f).toInt()
-            val h5 = (abs(sin(time * 9f + 4f)) * 5f).toInt()
-
-            drawEqCol(matrix, 3, h1)
-            drawEqCol(matrix, 6, h2)
-            drawEqCol(matrix, 8, h3)
-            drawEqCol(matrix, 10, h4)
-            drawEqCol(matrix, 12, h5)
+        val stemHighlightPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = max(0.8f, unit * 0.005f)
+            color = android.graphics.Color.argb(190, 255, 255, 255)
         }
+        nativeCanvas.drawPath(stemPath, stemHighlightPaint)
 
-        RobotHeadState.SPEAKING -> {
-            drawEye(matrix, 4, 2)
-            drawEye(matrix, 11, 2)
+        // 2. Antenna Bulb: 3D Frosted Glass Sphere
+        val bx = ballCP[0]
+        val by = ballCP[1]
+        val r = ballRadius * unit
 
-            val mouthOpen = (abs(sin(time * 10f)) * 3f).toInt()
-            for (c in 5..10) {
-                matrix[5][c] = true
-                if (mouthOpen >= 1) matrix[6][c] = true
-                if (mouthOpen >= 2) matrix[7][c] = true
-            }
-        }
+        val level = lightConfig.pulse(time).coerceIn(0f, 1f)
+        val ballColorArgb = lightConfig.ballColor.toArgb()
+        val bR = android.graphics.Color.red(ballColorArgb)
+        val bG = android.graphics.Color.green(ballColorArgb)
+        val bB = android.graphics.Color.blue(ballColorArgb)
 
-        RobotHeadState.WORKING -> {
-            val spinAngle = ((time * 8f) % 8f).toInt()
-            val coords = listOf(
-                Pair(1, 7), Pair(2, 9), Pair(3, 10), Pair(4, 9),
-                Pair(5, 7), Pair(4, 5), Pair(3, 4), Pair(2, 5)
+        // Outer glow halo
+        if (level > 0.05f) {
+            val glowRadius = r * 3.8f
+            val glowShader = android.graphics.RadialGradient(
+                bx, by, glowRadius,
+                intArrayOf(
+                    android.graphics.Color.argb((level * 115).roundToInt(), bR, bG, bB),
+                    android.graphics.Color.argb((level * 35).roundToInt(), bR, bG, bB),
+                    android.graphics.Color.TRANSPARENT
+                ),
+                floatArrayOf(0f, 0.4f, 1f),
+                android.graphics.Shader.TileMode.CLAMP
             )
-            coords.forEachIndexed { i, pt ->
-                if ((i + spinAngle) % 8 < 5) matrix[pt.first][pt.second] = true
+            val glowPaint = Paint().apply {
+                isAntiAlias = true
+                style = Paint.Style.FILL
+                shader = glowShader
             }
-            val prog = ((time * 4f) % 16f).toInt()
-            for (c in 0..prog) matrix[7][c] = true
+            nativeCanvas.drawCircle(bx, by, glowRadius, glowPaint)
         }
 
-        RobotHeadState.HAPPY -> {
-            matrix[3][3] = true; matrix[2][4] = true; matrix[3][5] = true
-            matrix[3][10] = true; matrix[2][11] = true; matrix[3][12] = true
+        // Frosted glass sphere with internal filament
+        val coreLitR = min(255, (bR * 0.5f + 255 * 0.5f).roundToInt())
+        val coreLitG = min(255, (bG * 0.5f + 255 * 0.5f).roundToInt())
+        val coreLitB = min(255, (bB * 0.5f + 255 * 0.5f).roundToInt())
 
-            for (c in 5..10) matrix[6][c] = true
-            matrix[5][4] = true; matrix[5][11] = true
-            matrix[4][3] = true; matrix[4][12] = true
+        val bulbShader = android.graphics.RadialGradient(
+            bx - r * 0.22f, by - r * 0.25f, r * 1.05f,
+            intArrayOf(
+                android.graphics.Color.rgb(coreLitR, coreLitG, coreLitB),
+                android.graphics.Color.rgb(bR, bG, bB),
+                android.graphics.Color.rgb(
+                    (bR * 0.6f + 70 * 0.4f).roundToInt(),
+                    (bG * 0.6f + 76 * 0.4f).roundToInt(),
+                    (bB * 0.6f + 88 * 0.4f).roundToInt()
+                )
+            ),
+            floatArrayOf(0f, 0.55f, 1f),
+            android.graphics.Shader.TileMode.CLAMP
+        )
+
+        val bulbPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            shader = bulbShader
         }
+        nativeCanvas.drawCircle(bx, by, r, bulbPaint)
 
-        RobotHeadState.ERROR -> {
-            matrix[2][3] = true; matrix[2][5] = true
-            matrix[3][4] = true
-            matrix[4][3] = true; matrix[4][5] = true
-
-            matrix[2][10] = true; matrix[2][12] = true
-            matrix[3][11] = true
-            matrix[4][10] = true; matrix[4][12] = true
-
-            matrix[6][5] = true; matrix[7][6] = true; matrix[6][7] = true
-            matrix[7][8] = true; matrix[6][9] = true; matrix[7][10] = true
+        // Silhouette rim
+        val rimPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.STROKE
+            strokeWidth = max(0.8f, r * 0.08f)
+            color = android.graphics.Color.argb(85, 25, 30, 40)
         }
+        nativeCanvas.drawCircle(bx, by, r, rimPaint)
 
-        RobotHeadState.SLEEPING -> {
-            for (c in 3..5) matrix[4][c] = true
-            for (c in 10..12) matrix[4][c] = true
-
-            val zStep = (time * 2.5f) % 3f
-            if (zStep > 0f) matrix[6][8] = true
-            if (zStep > 1f) matrix[4][14] = true
-            if (zStep > 2f) matrix[1][15] = true
+        // White specular glint reflection spot
+        val glintPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            color = android.graphics.Color.argb(220, 255, 255, 255)
         }
-    }
-}
-
-private fun drawEye(matrix: Array<BooleanArray>, cx: Int, cy: Int) {
-    for (r in cy - 1..cy + 1) {
-        for (c in cx - 1..cx + 1) {
-            if (r in 0..7 && c in 0..15) {
-                matrix[r][c] = true
-            }
-        }
-    }
-}
-
-private fun drawEqCol(matrix: Array<BooleanArray>, col: Int, height: Int) {
-    val h = height.coerceIn(0, 7)
-    for (r in (7 - h)..7) {
-        if (col in 0..15 && r in 0..7) {
-            matrix[r][col] = true
-        }
+        nativeCanvas.drawCircle(bx - r * 0.35f, by - r * 0.38f, r * 0.26f, glintPaint)
     }
 }
