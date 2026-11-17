@@ -65,7 +65,8 @@ fun ShapeDock(
                         speed = 0.8f,
                         isPaused = false,
                         floorShadow = false,
-                        interactive = false
+                        interactive = false,
+                        isHighQuality = false
                     )
                 }
             }

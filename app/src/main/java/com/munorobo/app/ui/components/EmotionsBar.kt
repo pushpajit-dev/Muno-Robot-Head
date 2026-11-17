@@ -78,7 +78,8 @@ fun EmotionsBar(
                         speed = speed,
                         isPaused = isPaused,
                         floorShadow = false,
-                        interactive = false
+                        interactive = false,
+                        isHighQuality = false
                     )
 
                     Text(

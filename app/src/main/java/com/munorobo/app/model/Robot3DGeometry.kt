@@ -38,7 +38,6 @@ class Shape3D(
     val hy: Float,
     val pitch: Float,
     val earX: Float,
-    val screws: List<Triple<Float, Float, Float>>,
     val sdPoly: (Float, Float) -> Float
 ) {
     fun sd(x: Float, y: Float, inset: Float): Float = sdPoly(x, y) - (r - inset)
@@ -165,8 +164,7 @@ object Robot3DGeometry {
         name: RobotHeadShape,
         centres: List<Pair<Float, Float>>,
         r: Float,
-        depth: Float,
-        screwDirs: List<Float> = listOf(45f, 135f)
+        depth: Float
     ): Shape3D {
         val sorted = centres.map { (x, y) -> Triple(x, y, atan2(y, x)) }
             .sortedBy { it.third }
@@ -229,19 +227,7 @@ object Robot3DGeometry {
         val gh = 2f * (hy - InsetConstants.glass)
         val pitch = min((0.6f * gw) / 14f, (0.65f * gh) / 10f)
 
-        // Corner screw placement
-        val inward = (InsetConstants.hole - 0.018f + InsetConstants.plate) / 2f
-        val screws = screwDirs.mapIndexed { idx, deg ->
-            val rad = Math.toRadians(deg.toDouble()).toFloat()
-            val c = corners.find { k ->
-                val diff0 = (rad - k.a0).mod(TAU)
-                val diff1 = (k.a1 - rad).mod(TAU)
-                diff0 >= -1e-4f && diff1 >= -1e-4f
-            } ?: corners[0]
-            Triple(c.x + cos(rad) * (r - inward), c.y + sin(rad) * (r - inward), 0.5f + idx * 0.9f)
-        }
-
-        return Shape3D(name, r, depth, corners, hx, hy, pitch, lo - 0.008f, screws, sdPoly)
+        return Shape3D(name, r, depth, corners, hx, hy, pitch, lo - 0.008f, sdPoly)
     }
 
     private val hexCentres = listOf(0, 60, 120, 180, 240, 300).map { d ->
@@ -255,38 +241,33 @@ object Robot3DGeometry {
                 RobotHeadShape.RECTANGLE,
                 listOf(Pair(-0.29f, -0.17f), Pair(0.29f, -0.17f), Pair(0.29f, 0.17f), Pair(-0.29f, 0.17f)),
                 0.21f,
-                0.6f,
-                listOf(45f, 135f)
+                0.6f
             )
             RobotHeadShape.SQUARE -> makeShape(
                 RobotHeadShape.SQUARE,
                 listOf(Pair(-0.22f, -0.22f), Pair(0.22f, -0.22f), Pair(0.22f, 0.22f), Pair(-0.22f, 0.22f)),
                 0.2f,
-                0.6f,
-                listOf(45f, 135f)
+                0.6f
             )
             RobotHeadShape.CIRCLE -> makeShape(
                 RobotHeadShape.CIRCLE,
                 listOf(Pair(0f, 0f)),
                 0.46f,
-                0.56f,
-                listOf(45f, 135f)
+                0.56f
             )
             RobotHeadShape.HEXAGON -> makeShape(
                 RobotHeadShape.HEXAGON,
                 hexCentres,
                 0.16f,
-                0.58f,
-                listOf(60f, 120f)
+                0.58f
             )
         }
     }
 
     /**
-     * Builds beveled body mesh with high tessellation (16 bevel steps, 16 outline steps)
-     * for seamless smooth lighting without polygonal faceting.
+     * Builds beveled body mesh.
      */
-    fun buildBody(shape: Shape3D, bevelSteps: Int = 16): Mesh {
+    fun buildBody(shape: Shape3D, bevelSteps: Int = 16, outlineSteps: Int = 14): Mesh {
         val r = shape.r
         val b = HeadConstants.bevel
         val zf = shape.depth / 2f
@@ -294,7 +275,7 @@ object Robot3DGeometry {
         val outline = ArrayList<FloatArray>()
         for (c in shape.corners) {
             val sweep = c.a1 - c.a0
-            val steps = max(4, ceil((sweep / (PI.toFloat() / 2f)) * 16f).toInt())
+            val steps = max(3, ceil((sweep / (PI.toFloat() / 2f)) * outlineSteps.toFloat()).toInt())
             val last = if (sweep >= TAU - 1e-6f) steps - 1 else steps
             for (i in 0..last) {
                 val a = c.a0 + (i.toFloat() / steps) * sweep
@@ -336,13 +317,13 @@ object Robot3DGeometry {
     }
 
     /**
-     * High-resolution lathe mesh with 48 segments for perfectly curved, mirror-smooth metallic knobs.
+     * High-resolution lathe mesh for smooth curved surfaces.
      */
     fun buildLathe(
         profile: List<Pair<Float, Float>>,
         origin: FloatArray,
         axis: FloatArray,
-        segments: Int = 48
+        segments: Int = 40
     ): Mesh {
         val e1 = if (abs(axis[1]) > 0.9f) floatArrayOf(1f, 0f, 0f) else floatArrayOf(0f, 1f, 0f)
         val e2 = norm(
@@ -401,16 +382,27 @@ object Robot3DGeometry {
         val collar: Mesh
     )
 
-    private val cache = HashMap<RobotHeadShape, HeadMeshes3D>()
+    private val highQualityCache = HashMap<RobotHeadShape, HeadMeshes3D>()
+    private val lowQualityCache = HashMap<RobotHeadShape, HeadMeshes3D>()
 
-    fun headMeshes(shape: Shape3D): HeadMeshes3D {
-        return cache.getOrPut(shape.name) {
-            HeadMeshes3D(
-                body = buildBody(shape, bevelSteps = 16),
-                earL = buildLathe(earProfile, floatArrayOf(-shape.earX, HeadConstants.earY, 0f), floatArrayOf(-1f, 0f, 0f), segments = 48),
-                earR = buildLathe(earProfile, floatArrayOf(shape.earX, HeadConstants.earY, 0f), floatArrayOf(1f, 0f, 0f), segments = 48),
-                collar = buildLathe(collarProfile, floatArrayOf(0f, -shape.hy, 0f), floatArrayOf(0f, -1f, 0f), segments = 32)
-            )
+    fun headMeshes(shape: Shape3D, isHighQuality: Boolean = true): HeadMeshes3D {
+        val targetCache = if (isHighQuality) highQualityCache else lowQualityCache
+        return targetCache.getOrPut(shape.name) {
+            if (isHighQuality) {
+                HeadMeshes3D(
+                    body = buildBody(shape, bevelSteps = 14, outlineSteps = 12),
+                    earL = buildLathe(earProfile, floatArrayOf(-shape.earX, HeadConstants.earY, 0f), floatArrayOf(-1f, 0f, 0f), segments = 36),
+                    earR = buildLathe(earProfile, floatArrayOf(shape.earX, HeadConstants.earY, 0f), floatArrayOf(1f, 0f, 0f), segments = 36),
+                    collar = buildLathe(collarProfile, floatArrayOf(0f, -shape.hy, 0f), floatArrayOf(0f, -1f, 0f), segments = 24)
+                )
+            } else {
+                HeadMeshes3D(
+                    body = buildBody(shape, bevelSteps = 6, outlineSteps = 6),
+                    earL = buildLathe(earProfile, floatArrayOf(-shape.earX, HeadConstants.earY, 0f), floatArrayOf(-1f, 0f, 0f), segments = 16),
+                    earR = buildLathe(earProfile, floatArrayOf(shape.earX, HeadConstants.earY, 0f), floatArrayOf(1f, 0f, 0f), segments = 16),
+                    collar = buildLathe(collarProfile, floatArrayOf(0f, -shape.hy, 0f), floatArrayOf(0f, -1f, 0f), segments = 12)
+                )
+            }
         }
     }
 }

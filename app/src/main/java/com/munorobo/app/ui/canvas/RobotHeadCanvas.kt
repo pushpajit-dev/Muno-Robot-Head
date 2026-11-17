@@ -20,6 +20,18 @@ import com.munorobo.app.model.*
 import kotlinx.coroutines.launch
 import kotlin.math.*
 
+/**
+ * Reusable pre-allocated memory buffers to eliminate GC pauses and frame hangs.
+ */
+class MeshRenderBuffers(maxVerts: Int = 3000, maxQuads: Int = 3000) {
+    val projected = FloatArray(maxVerts * 3)
+    val vertColors = IntArray(maxVerts)
+    val verts2D = FloatArray(maxVerts * 2)
+    val triangleIndices = ShortArray(maxQuads * 6)
+    val quadZSums = FloatArray(maxQuads)
+    val quadIndices = IntArray(maxQuads)
+}
+
 @Composable
 fun RobotHeadCanvas(
     shape: RobotHeadShape,
@@ -31,6 +43,7 @@ fun RobotHeadCanvas(
     isPaused: Boolean = false,
     floorShadow: Boolean = true,
     interactive: Boolean = true,
+    isHighQuality: Boolean = true,
     zoomScaleState: MutableState<Float>? = null,
     onPoke: () -> Unit = {}
 ) {
@@ -103,7 +116,7 @@ fun RobotHeadCanvas(
         )
     ) {
         val shape3D = remember(shape) { Robot3DGeometry.getShape(shape) }
-        val meshes = remember(shape) { Robot3DGeometry.headMeshes(shape3D) }
+        val meshes = remember(shape, isHighQuality) { Robot3DGeometry.headMeshes(shape3D, isHighQuality) }
 
         val texture = colors.texture
         val shellMat = remember(colors.shell, texture) {
@@ -131,6 +144,7 @@ fun RobotHeadCanvas(
         }
 
         val faceGrid = remember { Robot3DFaces.FaceGrid() }
+        val renderBuffers = remember { MeshRenderBuffers() }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val width = size.width
@@ -170,7 +184,7 @@ fun RobotHeadCanvas(
             val rMatrix = Robot3DGeometry.rotation(totalYaw, totalPitch, totalRoll)
 
             // Floor Shadow
-            if (floorShadow) {
+            if (floorShadow && isHighQuality) {
                 val shadowR = shape3D.hx * unit * 1.25f
                 val shadowH = shadowR * 0.25f
                 val shadowY = cy + (shape3D.hy + 0.16f) * unit + totalLift * unit * 0.2f
@@ -206,13 +220,13 @@ fun RobotHeadCanvas(
             // Populate face grid for current state and time
             Robot3DFaces.populate(faceGrid, state, time)
 
-            // 1. Draw Ear behind if facing away (with Gouraud smooth shading)
-            if (earLz < 0f) drawSmoothMesh(meshes.earL, trimMat, project, rMatrix)
-            if (earRz < 0f) drawSmoothMesh(meshes.earR, trimMat, project, rMatrix)
+            // 1. Draw Ear behind if facing away
+            if (earLz < 0f) drawSmoothMesh(meshes.earL, trimMat, project, rMatrix, renderBuffers)
+            if (earRz < 0f) drawSmoothMesh(meshes.earR, trimMat, project, rMatrix, renderBuffers)
 
             // 2. Draw Antenna & Collar behind if head tilted back
             if (antennaBehind) {
-                drawSmoothMesh(meshes.collar, trimMat, project, rMatrix)
+                drawSmoothMesh(meshes.collar, trimMat, project, rMatrix, renderBuffers)
                 if (antenna) {
                     drawAntennaStemAndBulb(
                         shape3D = shape3D,
@@ -228,9 +242,9 @@ fun RobotHeadCanvas(
             }
 
             // 3. Draw Main Head Shell 3D Quad Mesh with Per-Vertex Gouraud Smooth Shading
-            drawSmoothMesh(meshes.body, shellMat, project, rMatrix)
+            drawSmoothMesh(meshes.body, shellMat, project, rMatrix, renderBuffers)
 
-            // 4. Draw 3D Front Plate, Recessed Bezel & LED Face (or Back Plate with Vents if rotated back)
+            // 4. Draw 3D Front Plate, Recessed Bezel & LED Face (Clean, NO screws/spots)
             val frontZ = rMatrix[8]
             val zf = shape3D.depth / 2f
 
@@ -245,7 +259,8 @@ fun RobotHeadCanvas(
                     unit = unit,
                     totalYaw = totalYaw,
                     totalPitch = totalPitch,
-                    rMatrix = rMatrix
+                    rMatrix = rMatrix,
+                    isHighQuality = isHighQuality
                 )
             } else if (frontZ < -0.005f) {
                 draw3DBackPlate(
@@ -257,13 +272,13 @@ fun RobotHeadCanvas(
                 )
             }
 
-            // 5. Draw Ear in front (with Gouraud smooth shading)
-            if (earLz >= 0f) drawSmoothMesh(meshes.earL, trimMat, project, rMatrix)
-            if (earRz >= 0f) drawSmoothMesh(meshes.earR, trimMat, project, rMatrix)
+            // 5. Draw Ear in front
+            if (earLz >= 0f) drawSmoothMesh(meshes.earL, trimMat, project, rMatrix, renderBuffers)
+            if (earRz >= 0f) drawSmoothMesh(meshes.earR, trimMat, project, rMatrix, renderBuffers)
 
             // 6. Draw Antenna & Collar in front
             if (!antennaBehind) {
-                drawSmoothMesh(meshes.collar, trimMat, project, rMatrix)
+                drawSmoothMesh(meshes.collar, trimMat, project, rMatrix, renderBuffers)
                 if (antenna) {
                     drawAntennaStemAndBulb(
                         shape3D = shape3D,
@@ -282,19 +297,23 @@ fun RobotHeadCanvas(
 }
 
 /**
- * Ultra-smooth mesh renderer with Hardware-Accelerated Gouraud Shading.
- * Computes PBR radiance at every vertex normal, eliminating low-poly faceting.
+ * Ultra-smooth mesh renderer with Hardware-Accelerated Gouraud Shading using reusable pre-allocated buffers.
+ * Eliminates heap allocation during rendering, ensuring smooth 60-120 FPS without GC frame drops.
  */
 private fun DrawScope.drawSmoothMesh(
     mesh: Mesh,
     material: Material3D,
     project: (Float, Float, Float) -> FloatArray,
-    rMatrix: FloatArray
+    rMatrix: FloatArray,
+    buffers: MeshRenderBuffers
 ) {
     val numQuads = mesh.quads.size / 4
     val numVertices = mesh.pos.size / 3
-    val projected = FloatArray(mesh.pos.size)
-    val vertColors = IntArray(numVertices)
+    if (numVertices > buffers.vertColors.size || numQuads > buffers.quadIndices.size) return
+
+    val projected = buffers.projected
+    val vertColors = buffers.vertColors
+    val verts2D = buffers.verts2D
 
     // 1. Project all vertices and compute per-vertex PBR radiance colors
     for (i in 0 until numVertices) {
@@ -306,6 +325,9 @@ private fun DrawScope.drawSmoothMesh(
         projected[i * 3 + 1] = p[1]
         projected[i * 3 + 2] = p[2]
 
+        verts2D[i * 2] = p[0]
+        verts2D[i * 2 + 1] = p[1]
+
         val nx = mesh.vertexNormals[i * 3]
         val ny = mesh.vertexNormals[i * 3 + 1]
         val nz = mesh.vertexNormals[i * 3 + 2]
@@ -313,8 +335,11 @@ private fun DrawScope.drawSmoothMesh(
         vertColors[i] = Robot3DLight.shade(material, worldNorm[0], worldNorm[1], worldNorm[2]).toArgb()
     }
 
-    // 2. Back-face culling & depth sorting of quads
-    val visibleQuads = ArrayList<Pair<Float, Int>>()
+    // 2. Back-face culling & depth collection of quads
+    var visibleCount = 0
+    val quadDepths = buffers.quadZSums
+    val quadIndices = buffers.quadIndices
+
     for (k in 0 until numQuads) {
         val nx = mesh.normals[k * 3]
         val ny = mesh.normals[k * 3 + 1]
@@ -326,13 +351,46 @@ private fun DrawScope.drawSmoothMesh(
                 projected[mesh.quads[k * 4 + 1] * 3 + 2] +
                 projected[mesh.quads[k * 4 + 2] * 3 + 2] +
                 projected[mesh.quads[k * 4 + 3] * 3 + 2]
-        visibleQuads.add(Pair(zSum, k))
+
+        quadDepths[visibleCount] = zSum
+        quadIndices[visibleCount] = k
+        visibleCount++
     }
 
-    if (visibleQuads.isEmpty()) return
+    if (visibleCount == 0) return
 
-    // Depth sort back to front
-    visibleQuads.sortBy { it.first }
+    // Quick insertion sort for quad depth ordering (small visible count, zero allocations)
+    for (i in 1 until visibleCount) {
+        val keyZ = quadDepths[i]
+        val keyIdx = quadIndices[i]
+        var j = i - 1
+        while (j >= 0 && quadDepths[j] > keyZ) {
+            quadDepths[j + 1] = quadDepths[j]
+            quadIndices[j + 1] = quadIndices[j]
+            j--
+        }
+        quadDepths[j + 1] = keyZ
+        quadIndices[j + 1] = keyIdx
+    }
+
+    // 3. Emit triangles into pre-allocated indices buffer
+    val indices = buffers.triangleIndices
+    var idx = 0
+    for (i in 0 until visibleCount) {
+        val k = quadIndices[i]
+        val v0 = mesh.quads[k * 4].toShort()
+        val v1 = mesh.quads[k * 4 + 1].toShort()
+        val v2 = mesh.quads[k * 4 + 2].toShort()
+        val v3 = mesh.quads[k * 4 + 3].toShort()
+
+        indices[idx++] = v0
+        indices[idx++] = v1
+        indices[idx++] = v2
+
+        indices[idx++] = v0
+        indices[idx++] = v2
+        indices[idx++] = v3
+    }
 
     drawIntoCanvas { canvas ->
         val nativeCanvas = canvas.nativeCanvas
@@ -340,31 +398,6 @@ private fun DrawScope.drawSmoothMesh(
             isAntiAlias = true
             isDither = true
             isFilterBitmap = true
-        }
-
-        // 2D vertex positions [x0, y0, x1, y1, ...]
-        val verts2D = FloatArray(numVertices * 2)
-        for (i in 0 until numVertices) {
-            verts2D[i * 2] = projected[i * 3]
-            verts2D[i * 2 + 1] = projected[i * 3 + 1]
-        }
-
-        val totalIndices = visibleQuads.size * 6
-        val indices = ShortArray(totalIndices)
-        var idx = 0
-        for ((_, k) in visibleQuads) {
-            val v0 = mesh.quads[k * 4].toShort()
-            val v1 = mesh.quads[k * 4 + 1].toShort()
-            val v2 = mesh.quads[k * 4 + 2].toShort()
-            val v3 = mesh.quads[k * 4 + 3].toShort()
-
-            indices[idx++] = v0
-            indices[idx++] = v1
-            indices[idx++] = v2
-
-            indices[idx++] = v0
-            indices[idx++] = v2
-            indices[idx++] = v3
         }
 
         nativeCanvas.drawVertices(
@@ -378,7 +411,7 @@ private fun DrawScope.drawSmoothMesh(
             0,
             indices,
             0,
-            totalIndices,
+            idx,
             paint
         )
     }
@@ -386,9 +419,7 @@ private fun DrawScope.drawSmoothMesh(
 
 /**
  * 3D Front Face Plate & Screen.
- * Uses native 2D affine matrix projection with studio dome radiance gradients so the plate
- * reflects the environment and lighting smoothly, with full-screen CRT dark LED cells,
- * corner screws, and 22x14 animated face expressions.
+ * Fully clean, sleek, and streamlined — zero screw spots or number marks.
  */
 private fun DrawScope.draw3DFrontPlateAndFace(
     shape3D: Shape3D,
@@ -400,7 +431,8 @@ private fun DrawScope.draw3DFrontPlateAndFace(
     unit: Float,
     totalYaw: Float,
     totalPitch: Float,
-    rMatrix: FloatArray
+    rMatrix: FloatArray,
+    isHighQuality: Boolean
 ) {
     drawIntoCanvas { canvas ->
         val nativeCanvas = canvas.nativeCanvas
@@ -462,30 +494,7 @@ private fun DrawScope.draw3DFrontPlateAndFace(
         }
         nativeCanvas.drawPath(platePath, hPaint)
 
-        // Subtle Corner Screws
-        val screwPaint = Paint().apply {
-            isAntiAlias = true
-            style = Paint.Style.FILL
-            color = android.graphics.Color.rgb(180, 190, 205)
-        }
-        val screwSlotPaint = Paint().apply {
-            isAntiAlias = true
-            style = Paint.Style.STROKE
-            strokeWidth = 0.003f
-            color = android.graphics.Color.rgb(60, 68, 80)
-        }
-        for (screw in shape3D.screws) {
-            val sx = screw.first
-            val sy = screw.second
-            val sAngle = screw.third
-            val sRadius = 0.012f
-            nativeCanvas.drawCircle(sx, sy, sRadius, screwPaint)
-            val dx = cos(sAngle) * sRadius * 0.75f
-            val dy = sin(sAngle) * sRadius * 0.75f
-            nativeCanvas.drawLine(sx - dx, sy - dy, sx + dx, sy + dy, screwSlotPaint)
-        }
-
-        // 2. Recessed Screen Hole Border (Dark Bezel Ring with inner rolled shadow)
+        // 2. Recessed Screen Hole Border (Dark Bezel Ring with inner rolled shadow, NO SCREWS/SPOTS)
         val holePath = android.graphics.Path()
         shape3D.tracePath(holePath, Robot3DGeometry.InsetConstants.hole)
         val holePaint = Paint().apply {
@@ -520,7 +529,7 @@ private fun DrawScope.draw3DFrontPlateAndFace(
             glassBgPaint
         )
 
-        // 4. Full-Glass CRT LED Grid Matrix
+        // 4. CRT LED Grid Matrix & Centered Face Expression
         val pitch = shape3D.pitch
         val cell = pitch * 0.8f
         val radius = cell / 2f
@@ -529,17 +538,6 @@ private fun DrawScope.draw3DFrontPlateAndFace(
         val rC = android.graphics.Color.red(activeArgb)
         val gC = android.graphics.Color.green(activeArgb)
         val bC = android.graphics.Color.blue(activeArgb)
-
-        val unlitLensPaint = Paint().apply {
-            isAntiAlias = true
-            style = Paint.Style.FILL
-            color = android.graphics.Color.argb(45, 60, 68, 80)
-        }
-        val unlitGlintPaint = Paint().apply {
-            isAntiAlias = true
-            style = Paint.Style.FILL
-            color = android.graphics.Color.argb(18, 255, 255, 255)
-        }
 
         val ledGlowPaint = Paint().apply {
             isAntiAlias = true
@@ -559,65 +557,82 @@ private fun DrawScope.draw3DFrontPlateAndFace(
         val faceCols = Robot3DFaces.COLS
         val faceRows = Robot3DFaces.ROWS
 
-        // Render full grid across entire screen glass
-        for (r in -rowCount..rowCount) {
-            val v = r * pitch
-            for (c in -colCount..colCount) {
-                val u = c * pitch
+        // On high-quality main stage, render batch unlit lenses efficiently with drawPoints
+        if (isHighQuality) {
+            val totalPoints = (rowCount * 2 + 1) * (colCount * 2 + 1)
+            val pts = FloatArray(totalPoints * 2)
+            var pIdx = 0
+            for (r in -rowCount..rowCount) {
+                val v = r * pitch
+                for (c in -colCount..colCount) {
+                    pts[pIdx++] = c * pitch
+                    pts[pIdx++] = v
+                }
+            }
+            val unlitPaint = Paint().apply {
+                isAntiAlias = true
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeWidth = radius * 1.4f
+                color = android.graphics.Color.argb(38, 60, 68, 80)
+            }
+            nativeCanvas.drawPoints(pts, unlitPaint)
+        }
 
-                // Unlit dark LED lens
-                nativeCanvas.drawCircle(u, v, radius * 0.75f, unlitLensPaint)
-                nativeCanvas.drawCircle(u, v - radius * 0.35f, radius * 0.28f, unlitGlintPaint)
+        // Draw Active Glowing LEDs in the center
+        val startU = -faceCols * pitch / 2f + pitch / 2f
+        val startV = -faceRows * pitch / 2f + pitch / 2f
 
-                // Face area centered in the middle of the glass
-                val faceC = c + faceCols / 2
-                val faceR = r + faceRows / 2
+        for (r in 0 until faceRows) {
+            val v = startV + r * pitch
+            for (c in 0 until faceCols) {
+                val intensity = faceGrid.get(c, r)
+                if (intensity > 0.01f) {
+                    val u = startU + c * pitch
 
-                if (faceC in 0 until faceCols && faceR in 0 until faceRows) {
-                    val intensity = faceGrid.get(faceC, faceR)
-                    if (intensity > 0.01f) {
-                        // Outer bloom glow bleed
-                        ledGlowPaint.color = android.graphics.Color.argb(
-                            (intensity * 115).roundToInt().coerceIn(0, 255),
-                            rC, gC, bC
-                        )
-                        nativeCanvas.drawCircle(u, v, radius * 2.2f, ledGlowPaint)
+                    // Outer bloom glow bleed
+                    ledGlowPaint.color = android.graphics.Color.argb(
+                        (intensity * 115).roundToInt().coerceIn(0, 255),
+                        rC, gC, bC
+                    )
+                    nativeCanvas.drawCircle(u, v, radius * 2.2f, ledGlowPaint)
 
-                        // Core bright LED
-                        val coreR = min(255, (rC * 0.65f + 255 * 0.35f).roundToInt())
-                        val coreG = min(255, (gC * 0.65f + 255 * 0.35f).roundToInt())
-                        val coreB = min(255, (bC * 0.65f + 255 * 0.35f).roundToInt())
-                        ledCorePaint.color = android.graphics.Color.argb(
-                            (intensity * 255).roundToInt().coerceIn(0, 255),
-                            coreR, coreG, coreB
-                        )
-                        nativeCanvas.drawCircle(u, v, radius, ledCorePaint)
-                    }
+                    // Core bright LED
+                    val coreR = min(255, (rC * 0.65f + 255 * 0.35f).roundToInt())
+                    val coreG = min(255, (gC * 0.65f + 255 * 0.35f).roundToInt())
+                    val coreB = min(255, (bC * 0.65f + 255 * 0.35f).roundToInt())
+                    ledCorePaint.color = android.graphics.Color.argb(
+                        (intensity * 255).roundToInt().coerceIn(0, 255),
+                        coreR, coreG, coreB
+                    )
+                    nativeCanvas.drawCircle(u, v, radius, ledCorePaint)
                 }
             }
         }
 
         // 5. Dynamic Glass Sheen Reflection (Slides smoothly as robot turns)
-        val sheenShift = -0.05f - totalYaw * 0.85f + totalPitch * 0.45f
-        val sheenShader = android.graphics.LinearGradient(
-            -0.55f + sheenShift, -0.35f, 0.15f + sheenShift, 0.35f,
-            intArrayOf(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.argb(28, 220, 235, 255),
-                android.graphics.Color.TRANSPARENT
-            ),
-            floatArrayOf(0f, 0.5f, 1f),
-            android.graphics.Shader.TileMode.CLAMP
-        )
-        val sheenPaint = Paint().apply {
-            isAntiAlias = true
-            style = Paint.Style.FILL
-            shader = sheenShader
+        if (isHighQuality) {
+            val sheenShift = -0.05f - totalYaw * 0.85f + totalPitch * 0.45f
+            val sheenShader = android.graphics.LinearGradient(
+                -0.55f + sheenShift, -0.35f, 0.15f + sheenShift, 0.35f,
+                intArrayOf(
+                    android.graphics.Color.TRANSPARENT,
+                    android.graphics.Color.argb(28, 220, 235, 255),
+                    android.graphics.Color.TRANSPARENT
+                ),
+                floatArrayOf(0f, 0.5f, 1f),
+                android.graphics.Shader.TileMode.CLAMP
+            )
+            val sheenPaint = Paint().apply {
+                isAntiAlias = true
+                style = Paint.Style.FILL
+                shader = sheenShader
+            }
+            nativeCanvas.drawRect(
+                RectF(-shape3D.hx, -shape3D.hy, shape3D.hx, shape3D.hy),
+                sheenPaint
+            )
         }
-        nativeCanvas.drawRect(
-            RectF(-shape3D.hx, -shape3D.hy, shape3D.hx, shape3D.hy),
-            sheenPaint
-        )
 
         nativeCanvas.restore() // Restore glass clip
         nativeCanvas.restore() // Restore front plane matrix

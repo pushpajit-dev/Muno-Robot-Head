@@ -1,6 +1,5 @@
 package com.munorobo.app.ui.components
 
-import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,10 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,8 +41,7 @@ fun PropertiesBottomSheet(
     onReset: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
+    val uriHandler = LocalUriHandler.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -99,102 +94,7 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 1. Surface Texture & Finish Selection
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Surface Texture & Finish",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(vertical = 2.dp)
-                ) {
-                    items(Swatches.textures) { tex ->
-                        val isSelected = colors.texture == tex
-                        TextureCard(
-                            texture = tex,
-                            isSelected = isSelected,
-                            onClick = { onColorsChange(colors.copy(texture = tex)) }
-                        )
-                    }
-                }
-            }
-
-            // 2. Shell Color Row (Horizontal Scroll)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Shell Color",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 2.dp)
-                ) {
-                    items(Swatches.shellColors) { (name, color) ->
-                        val isSelected = colors.shell == color
-                        ColorSwatchCircle(
-                            color = color,
-                            label = name,
-                            isSelected = isSelected,
-                            onClick = { onColorsChange(colors.copy(shell = color)) }
-                        )
-                    }
-                }
-            }
-
-            // 3. Trim Color Row (Horizontal Scroll)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Trim Color",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 2.dp)
-                ) {
-                    items(Swatches.trimColors) { (name, color) ->
-                        val isSelected = colors.trim == color
-                        ColorSwatchCircle(
-                            color = color,
-                            label = name,
-                            isSelected = isSelected,
-                            onClick = { onColorsChange(colors.copy(trim = color)) }
-                        )
-                    }
-                }
-            }
-
-            // 4. Screen Color Row (Horizontal Scroll)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Screen LED Color",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 2.dp)
-                ) {
-                    items(Swatches.screenColors) { (name, color) ->
-                        val isSelected = colors.screen == color
-                        ColorSwatchCircle(
-                            color = color,
-                            label = name,
-                            isSelected = isSelected,
-                            onClick = { onColorsChange(colors.copy(screen = color)) }
-                        )
-                    }
-                }
-            }
-
-            // 5. Controls Row (Play/Pause Icon, Antenna Icon, Speed Chips) in a Horizontal Scroll
+            // 1. Controls Row (PLAY/PAUSE & ANIMATION OPTIONS PLACED ABOVE PROPERTIES)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -242,49 +142,173 @@ fun PropertiesBottomSheet(
                 }
             }
 
-            // 6. Code Snippet Card with Material 3 Copy Icon
-            val codeSnippet = """
-<RobotHead
-  shape="${shape.label.lowercase()}"
-  state="${state.label.lowercase()}"
-  texture="${colors.texture.name.lowercase()}"
-  antenna={$antenna}
-  speed={$speed}
-/>
-            """.trimIndent()
+            // 2. Surface Texture & Finish Selection
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Surface Texture & Finish",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
+                ) {
+                    items(Swatches.textures) { tex ->
+                        val isSelected = colors.texture == tex
+                        TextureCard(
+                            texture = tex,
+                            isSelected = isSelected,
+                            onClick = { onColorsChange(colors.copy(texture = tex)) }
+                        )
+                    }
+                }
+            }
 
+            // 3. Shell Color Row (Horizontal Scroll)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Shell Color",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
+                ) {
+                    items(Swatches.shellColors) { (name, color) ->
+                        val isSelected = colors.shell == color
+                        ColorSwatchCircle(
+                            color = color,
+                            label = name,
+                            isSelected = isSelected,
+                            onClick = { onColorsChange(colors.copy(shell = color)) }
+                        )
+                    }
+                }
+            }
+
+            // 4. Trim Color Row (Horizontal Scroll)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Trim Color",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
+                ) {
+                    items(Swatches.trimColors) { (name, color) ->
+                        val isSelected = colors.trim == color
+                        ColorSwatchCircle(
+                            color = color,
+                            label = name,
+                            isSelected = isSelected,
+                            onClick = { onColorsChange(colors.copy(trim = color)) }
+                        )
+                    }
+                }
+            }
+
+            // 5. Screen Color Row (Horizontal Scroll)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Screen LED Color",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
+                ) {
+                    items(Swatches.screenColors) { (name, color) ->
+                        val isSelected = colors.screen == color
+                        ColorSwatchCircle(
+                            color = color,
+                            label = name,
+                            isSelected = isSelected,
+                            onClick = { onColorsChange(colors.copy(screen = color)) }
+                        )
+                    }
+                }
+            }
+
+            // 6. App Info Card (No code snippet) - Developed by NoishiXzen with GitHub, Website & Discord links
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = codeSnippet,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    FilledTonalIconButton(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(codeSnippet))
-                            Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.size(34.dp),
-                        shape = RoundedCornerShape(8.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.ContentCopy,
-                            contentDescription = "Copy Code",
-                            modifier = Modifier.size(16.dp)
+                        Text(
+                            text = "Muno",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
+                        Text(
+                            text = "Developed by NoishiXzen",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // GitHub
+                        FilledTonalButton(
+                            onClick = { uriHandler.openUri("https://github.com/pushpajit-dev") },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Filled.Code, contentDescription = "GitHub", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("GitHub", fontSize = 10.5.sp)
+                        }
+
+                        // Website
+                        FilledTonalButton(
+                            onClick = { uriHandler.openUri("https://aivorygen.netlify.app") },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Filled.Language, contentDescription = "Website", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Website", fontSize = 10.5.sp)
+                        }
+
+                        // Discord
+                        FilledTonalButton(
+                            onClick = { uriHandler.openUri("https://discord.gg/Dcg2GreJ") },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Filled.Forum, contentDescription = "Discord", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Discord", fontSize = 10.5.sp)
+                        }
                     }
                 }
             }
